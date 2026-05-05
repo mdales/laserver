@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LiDAR Point Cloud</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; overflow: hidden; }
+    canvas { display: block; }
+
+    #ui {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      color: #aaa;
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.8;
+      pointer-events: none;
+      background: rgba(10, 10, 15, 0.85);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    #ui strong { color: #fff; font-size: 13px; }
+
+    #layers {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      background: rgba(10, 10, 15, 0.85);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .layer-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      padding: 5px 10px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #ccc;
+      user-select: none;
+    }
+    .layer-toggle:hover { background: rgba(255,255,255,0.1); }
+    .layer-toggle input { cursor: pointer; accent-color: #31c884; }
+    .swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    #color-modes {
+      display: flex;
+      gap: 4px;
+      padding: 5px 10px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .cm-btn {
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: transparent;
+      color: #aaa;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .cm-btn:hover { background: rgba(255,255,255,0.1); }
+    .cm-btn.active { background: #31c884; color: #000; border-color: #31c884; }
+
+    #about-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 10;
+      align-items: center;
+      justify-content: center;
+    }
+    #about-overlay.open { display: flex; }
+    #about-box {
+      background: #13131a;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 28px 32px;
+      max-width: 520px;
+      width: 90%;
+      font-family: monospace;
+      color: #ccc;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    #about-box h2 { color: #fff; font-size: 15px; margin-bottom: 14px; }
+    #about-box p  { margin-bottom: 14px; }
+    #about-box p:last-child { margin-bottom: 0; }
+    #about-box a  { color: #31c884; text-decoration: none; }
+    #about-box a:hover { text-decoration: underline; }
+    #about-close {
+      float: right;
+      background: none;
+      border: none;
+      color: #666;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      margin: -4px -6px 0 0;
+    }
+    #about-close:hover { color: #fff; }
+
+    #legend {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: rgba(10, 10, 15, 0.85);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    #gradient {
+      width: 12px; height: 120px;
+      border-radius: 2px;
+      background: linear-gradient(to bottom, #f7f79e, #31c884, #1a6b8a, #0d1b4b);
+    }
+    .legend-row { display: flex; align-items: center; gap: 6px; }
+
+    #cls-legend { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+    .cls-row { display: flex; align-items: center; gap: 6px; font-family: monospace; font-size: 10px; color: #aaa; }
+    .cls-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-family: monospace;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    #navcontrols {
+      display: flex;
+      flex-direction: row;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    .icon {
+      pointer-events: all;
+      display: block;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.15s;
+    }
+    .icon:hover { opacity: 1; }
+
+    .hidden-btn {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+<div id="loading">Initialising…</div>
+
+<div id="about-overlay">
+  <div id="about-box">
+    <button id="about-close">✕</button>
+    <h2>About this viewer</h2>
+
+    <p>
+      <!-- English description -->
+      This website shows LiDAR data from Kullberg near Junsele in Sollefteå, northern Sweden. It is built upon open data from Lantmäteriet och Naturvårdsverket.
+
+      Up in the top right there are controls where you can choose between different data visualisations. "Trees (p2r)" and "Trees (pitfree)" are different ways to estimate where the trees stand. "DSÄ kameror" shows the position of the cameras used in SVT's <a href="https://www.svtplay.se/den-stora-algvandringen">Great Moose Migration</a>.
+
+      You can read more on my weeknotes below.
+    </p>
+    <p>
+      <!-- Swedish description -->
+      Den här webbplatset visar LiDAR-data från Kullberg nära Junsele i Sollefteå, Västernorrland. Det är gjort på öppna data från Lantmäteriet och Naturvårdsverket.
+
+      Uppe till höger finns kontrollerna dar ni kan välja olika datavisualiseringar. "Trees (p2r)" och "Trees (pitfree)" visar annorlunda sätt att beräkna var träd står. "DSÄ kameror" visar var kamerorna ligger på SVT:s <a href="https://www.svtplay.se/den-stora-algvandringen">Den Stora Älgvandringen</a>.
+
+      Ni kan läsa mer på mitt webbplats här under.
+    </p>
+
+    <p>Michael Dales, University of Cambridge</p>
+
+    <p>
+      <a href="https://digitalflapjack.com/weeknotes/more-lidar-experiments/" target="_blank" rel="noopener">Weeknotes: More LiDAR experiments</a><br>
+      <a href="https://github.com/mdapes/points_viewer/" target="_blank" rel="noopener">Source code on GitHub</a>
+    </p>
+
+    <p style="color:#666; line-height:1.6;">
+      LiDAR: <a href="https://www.lantmateriet.se/sv/geodata/vara-produkter/produktlista/laserdata-nedladdning-skog/" target="_blank" rel="noopener">Lantmäteriet Laserdata Skog</a> — CC0<br>
+      Land cover: <a href="https://geodatakatalogen.naturvardsverket.se/geonetwork/srv/swe/catalog.search#/metadata/0f1a86d5-d578-44bd-957e-3dcdb0b34ba0" target="_blank" rel="noopener">Naturvårdsverket NMD 2018</a> — Europa No Limits<br>
+      Icons: <a href="https://lucide.dev">Lucide</a> - ISC
+    </p>
+  </div>
+</div>
+
+<div id="ui" style="display:none">
+  <strong id="title">LiDAR — Kullberg</strong><br><br>
+  drag · pan<br>
+  right-drag · rotate<br>
+  scroll · zoom<br><br>
+
+  <div id="navcontrols">
+
+    <svg class="icon" id="about-btn" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info-icon lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+
+    <svg class="icon" id="home-btn" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-house-icon lucide-house"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+
+    <svg class="icon" id="share-btn" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-share-icon lucide-share"><path d="M12 2v13"/><path d="m16 6-4-4-4 4"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/></svg>
+    <svg class="icon hidden-btn" id="shared-btn" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check-icon lucide-check"><path d="M20 6 9 17l-5-5"/></svg>
+  </div>
+
+</div>
+
+<div id="layers">
+  <div id="color-modes">
+    <button class="cm-btn active" data-mode="height">height</button>
+    <button class="cm-btn" data-mode="classification">class</button>
+    <button class="cm-btn" id="btn-rgb" data-mode="rgb" style="display:none">rgb</button>
+    <button class="cm-btn" id="btn-lc" data-mode="landcover" style="display:none">land cover</button>
+  </div>
+  <label class="layer-toggle">
+    <input type="checkbox" checked data-layer="pointCloud">
+    <span class="swatch" style="background:#5ad"></span>
+    Points — <span id="pt-count">—</span>
+  </label>
+  <label class="layer-toggle">
+    <input class="tracked-checkbox" id="p2r-check" type="checkbox" data-layer="p2r">
+    <span class="swatch" style="background:#f44"></span>
+    Trees (p2r) — <span id="p2r-count"></span>
+  </label>
+  <label class="layer-toggle">
+    <input class="tracked-checkbox" id="pitfree-check" type="checkbox" data-layer="pitfree">
+    <span class="swatch" style="background:#4f4"></span>
+    Trees (pit-free) — <span id="pitfree-count"></span>
+  </label>
+  <label class="layer-toggle">
+    <input class="tracked-checkbox" id="cameras-check" type="checkbox" data-layer="cameras">
+    <span class="swatch" style="background:#ff4"></span>
+    DSÄ kameror — <span id="cameras-count"></span>
+  </label>
+</div>
+
+<div id="legend" style="display:none">
+  <div id="height-legend">
+    <div class="legend-row"><span id="z-max"></span></div>
+    <div class="legend-row"><div id="gradient"></div></div>
+    <div class="legend-row"><span id="z-min"></span></div>
+  </div>
+  <div id="cls-legend" style="display:none"></div>
+  <div id="lc-legend"  style="display:none"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "/three@0.183.2/three.module.min.js",
+    "three/addons/": "/three@0.183.2/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import copcLib from '/copc-bundle.js';
+const { Copc, Las } = copcLib;
+
+// ── Color maps ────────────────────────────────────────────────────────────────
+
+const MAKO = [
+  [13/255,  27/255,  75/255],
+  [26/255, 107/255, 138/255],
+  [49/255, 200/255, 132/255],
+  [247/255, 247/255, 158/255],
+];
+
+function heightColor(t, out, i) {
+  t = Math.max(0, Math.min(1, t));
+  const s = t * (MAKO.length - 1);
+  const lo = Math.min(Math.floor(s), MAKO.length - 2);
+  const f  = s - lo;
+  out[i]   = MAKO[lo][0] + f * (MAKO[lo+1][0] - MAKO[lo][0]);
+  out[i+1] = MAKO[lo][1] + f * (MAKO[lo+1][1] - MAKO[lo][1]);
+  out[i+2] = MAKO[lo][2] + f * (MAKO[lo+1][2] - MAKO[lo][2]);
+}
+
+// prettier-ignore
+const CLS_RGB = new Float32Array([
+  0.50,0.50,0.50, // 0  never classified
+  0.50,0.50,0.50, // 1  unassigned
+  0.60,0.45,0.25, // 2  ground
+  0.55,0.75,0.40, // 3  low vegetation
+  0.30,0.60,0.25, // 4  medium vegetation
+  0.10,0.40,0.15, // 5  high vegetation
+  0.80,0.30,0.20, // 6  building
+  0.90,0.10,0.90, // 7  low noise
+  0.40,0.40,0.40, // 8  reserved
+  0.20,0.40,0.80, // 9  water
+  0.30,0.30,0.35, // 10 rail
+  0.65,0.65,0.65, // 11 road surface
+  0.40,0.40,0.40, // 12 reserved
+  0.90,0.80,0.10, // 13 wire – guard
+  0.90,0.60,0.10, // 14 wire – conductor
+  0.60,0.20,0.20, // 15 transmission tower
+  0.80,0.50,0.10, // 16 wire connector
+  0.60,0.50,0.35, // 17 bridge deck
+  1.00,0.00,0.50, // 18 high noise
+]);
+
+const CLS_LABELS = [
+  'Never classified','Unassigned','Ground','Low vegetation','Medium vegetation',
+  'High vegetation','Building','Low noise','Reserved','Water','Rail',
+  'Road surface','Reserved','Wire – guard','Wire – conductor','Transmission tower',
+  'Wire connector','Bridge deck','High noise',
+];
+
+function classColor(cls, out, i) {
+  const c = Math.min(cls, 18) * 3;
+  out[i]   = CLS_RGB[c];
+  out[i+1] = CLS_RGB[c + 1];
+  out[i+2] = CLS_RGB[c + 2];
+}
+
+// ── Scene ─────────────────────────────────────────────────────────────────────
+
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100000);
+camera.up.set(0, 0, 1);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ── Camera controls ───────────────────────────────────────────────────────────
+
+let defaults = {
+  sph: { theta: 0.4, phi: 0.5, r: 1000 },
+  target: new THREE.Vector3(),
+};
+
+let sph    = { theta: 0.4, phi: 0.5, r: 1000 };
+let target = new THREE.Vector3();
+let drag = false, rightDrag = false, prev = { x: 0, y: 0 };
+let prevPinchDist = null;
+
+function pinchDist(touches) {
+  return Math.hypot(
+    touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY
+  );
+}
+
+// ── Display LOD ───────────────────────────────────────────────────────────────
+//
+// The COPC octree gives each node a precise 3D bounding box.  We exploit this
+// to give sub-tile spatial resolution: a node near the camera target is shown
+// at full depth while a node at the far corner of the same tile is shown at
+// depth 0–1.  No reloading is needed — applyDisplayLOD() runs every frame and
+// simply shows/hides individual node meshes.
+
+const _lodFrustum = new THREE.Frustum();
+const _lodMatrix  = new THREE.Matrix4();
+
+// The point where the camera's look ray intersects the ground plane (Z=0).
+// This is what the user perceives as the screen centre — it differs from
+// `target` whenever the camera is tilted.  Recomputed once per render.
+const _groundFocus = new THREE.Vector2();
+function updateGroundFocus() {
+  // Look direction from camera toward target
+  const dx = target.x - camera.position.x;
+  const dy = target.y - camera.position.y;
+  const dz = target.z - camera.position.z;
+  // Intersect ray with Z=0: camera.z + t*dz = 0 → t = -camera.z / dz
+  if (dz < -1e-6) {  // looking downward — valid intersection
+    const t = -camera.position.z / dz;
+    _groundFocus.set(camera.position.x + t * dx, camera.position.y + t * dy);
+  } else {
+    // Camera looking up or horizontal — fall back to target XY
+    _groundFocus.set(target.x, target.y);
+  }
+}
+
+// Returns the maximum octree depth we want to *display* for this node's spatial
+// region, given the current camera state.  A node is visible iff its depth
+// is ≤ the returned value.
+function computeNodeTargetDepth(node) {
+  const tileSize = node.tile.box.max.x - node.tile.box.min.x;
+  const cx = (node.box.min.x + node.box.max.x) / 2;
+  const cy = (node.box.min.y + node.box.max.y) / 2;
+  // const dist2d = Math.hypot(_groundFocus.x - cx, _groundFocus.y - cy);
+  const dist2d = Math.hypot(target.x - cx, target.y - cy);
+
+  // Overall zoom depth: how much global detail do we want?
+  const zoomRatio = tileSize / sph.r;
+  const zoomDepth = zoomRatio < 0.25 ? 0
+                  : zoomRatio < 0.6  ? 1
+                  : zoomRatio < 1.2  ? 2
+                  : zoomRatio < 2.5  ? 3
+                  : Math.min(node.tile.maxAvailDepth, 5);
+
+  // Spatial falloff: normalised by orbit radius so the high-detail zone
+  // shrinks as you zoom in, giving finer spatial precision up close.
+  const distScale = 800; //Math.max(sph.r, tileSize * 0.2);  // floor at 20% of tile width
+  const distNorm  = dist2d / distScale;
+  const distDepth = distNorm < 1.0 ? zoomDepth
+                  : distNorm < 2.0 ? Math.min(zoomDepth, 2)
+                  : distNorm < 4.0 ? Math.min(zoomDepth, 1)
+                  : 0;
+
+  return distDepth;
+}
+
+function applyDisplayLOD() {
+  updateGroundFocus();
+  _lodMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _lodFrustum.setFromProjectionMatrix(_lodMatrix);
+  for (const tile of tileStates) {
+    if (tile.failed || !tile.box) continue;
+    const tileVis = _lodFrustum.intersectsBox(tile.box);
+    tile.group.visible = tileVis;
+    if (!tileVis) continue;
+    for (const node of tile.allNodes) {
+      if (!node.mesh) continue;
+      node.mesh.visible = node.depth <= computeNodeTargetDepth(node);
+    }
+  }
+}
+
+function render() {
+  camera.position.set(
+    target.x + sph.r * Math.sin(sph.phi) * Math.sin(sph.theta),
+    target.y + sph.r * Math.sin(sph.phi) * Math.cos(sph.theta) * -1.0,
+    target.z + sph.r * Math.cos(sph.phi)
+  );
+  camera.lookAt(target);
+  camera.updateMatrixWorld();
+  applyDisplayLOD();
+  renderer.render(scene, camera);
+}
+
+// ── About overlay ─────────────────────────────────────────────────────────────
+const aboutOverlay = document.getElementById('about-overlay');
+document.getElementById('about-btn').addEventListener('click', () => aboutOverlay.classList.add('open'));
+document.getElementById('about-close').addEventListener('click', () => aboutOverlay.classList.remove('open'));
+aboutOverlay.addEventListener('click', e => { if (e.target === aboutOverlay) aboutOverlay.classList.remove('open'); });
+
+document.getElementById('home-btn').addEventListener('click', () => {
+  sph    = { ...defaults.sph };
+  target = new THREE.Vector3(defaults.target.x, defaults.target.y, defaults.target.z);
+  scheduleLODUpdate();
+  history.replaceState(null, '', window.location.pathname);
+  render();
+});
+
+document.getElementById('share-btn').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(window.location.href);
+  document.getElementById('share-btn').classList.add('hidden-btn');
+  document.getElementById('shared-btn').classList.remove('hidden-btn');
+  setTimeout(() => {
+    document.getElementById('shared-btn').classList.add('hidden-btn');
+    document.getElementById('share-btn').classList.remove('hidden-btn');
+  }, 1500);
+});
+
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+renderer.domElement.addEventListener('mousedown', e => {
+  drag = true; rightDrag = e.button === 2;
+  prev = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) {
+    rightDrag = true;
+    rightDrag = false; prevPinchDist = null;
+    prev = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  } else {
+    prevPinchDist = pinchDist(e.touches);
+    prev = {
+      x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+      y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+    };
+  }
+  drag = true;
+});
+
+document.querySelectorAll('.tracked-checkbox').forEach(cb => {
+  cb.addEventListener('change', saveCameraToURL);
+});
+
+function loadCameraFromURL() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const s = params.get('s')?.split(',').map(Number);
+  const t = params.get('t')?.split(',').map(Number);
+  const toggles = params.get('o')?.split(',').map(Number);
+  if (s?.length === 3) {sph.theta = s[0]; sph.phi = s[1]; sph.r = s[2];};
+  if (t?.length === 3) target.set(...t);
+  if (toggles?.length === 3) {
+    document.getElementById('p2r-check').checked = toggles[0] === 1;
+    document.getElementById('pitfree-check').checked = toggles[1] === 1;
+    document.getElementById('cameras-check').checked = toggles[2] === 1;
+  };
+  if (params.has('cm')) {
+    colorMode = params.get('cm');
+    document.querySelectorAll('.cm-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === colorMode);
+    });
+  }
+}
+
+function saveCameraToURL() {
+  const s = sph;
+  const t = target;
+  const toggles = ['p2r-check', 'pitfree-check', 'cameras-check'].map(lbl =>
+    document.getElementById(lbl).checked ? '1' : '0'
+  );
+  const hash = `s=${fmt(s.theta)},${fmt(s.phi)},${fmt(s.r)}&t=${fmt(t.x)},${fmt(t.y)},${fmt(t.z)}&o=${toggles[0]},${toggles[1]},${toggles[2]}&cm=${colorMode}`;
+  history.replaceState(null, '', '#' + hash);
+}
+
+const fmt = v => Math.round(v * 100) / 100;
+
+['mouseup', 'touchend'].forEach(ev => window.addEventListener(ev, () => {
+  if (!drag) return;
+  drag = false;
+  scheduleURLUpdate();
+}));
+
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  applyDrag(e.clientX - prev.x, e.clientY - prev.y);
+  prev = { x: e.clientX, y: e.clientY };
+  render();
+});
+
+window.addEventListener('touchmove', e => {
+  if (!drag) return;
+  e.preventDefault();
+  if (e.touches.length != 2) {
+    const d = pinchDist(e.touches);
+    if (prevPinchDist !== null) sph.r = Math.max(10, Math.min(50000, sph.r * (prevPinchDist / d)));
+    prevPinchDist = d;
+  }
+  const x = e.touches.length === 2
+    ? e.touches[0].clientX : (e.touches[0].clientX + e.touches[1].clientX) / 2;
+  const y = e.touches.length === 2
+    ? e.touches[0].clientY : (e.touches[0].clientY + e.touches[1].clientY) / 2;
+  applyDrag(x - prev.x, y - prev.y);
+  prev = { x, y };
+  render();
+}, { passive: false });
+
+renderer.domElement.addEventListener('wheel', e => {
+  sph.r = Math.max(5, Math.min(50000, sph.r * (1 + e.deltaY * 0.001)));
+  scheduleLODUpdate();
+  scheduleURLUpdate();
+  render();
+}, { passive: true });
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  render();
+});
+
+function applyDrag(dx, dy) {
+  if (rightDrag) {
+    sph.theta -= dx * 0.005;
+    sph.phi = Math.max(0.05, Math.min(Math.PI * 0.95, sph.phi - dy * 0.005));
+  } else {
+    // Both vectors are in the XY (ground) plane so panning never drifts target.z
+    const right   = new THREE.Vector3( Math.cos(sph.theta),  Math.sin(sph.theta), 0);
+    const forward = new THREE.Vector3(-Math.sin(sph.theta),  Math.cos(sph.theta), 0);
+    target.addScaledVector(right,   -dx * sph.r * 0.001);
+    target.addScaledVector(forward,  dy * sph.r * 0.001);
+    scheduleRefetch();
+  }
+
+  scheduleLODUpdate();
+}
+
+// ── Layer registry ────────────────────────────────────────────────────────────
+
+const layers = {};
+
+document.querySelectorAll('#layers input[type=checkbox]').forEach(checkbox => {
+  checkbox.addEventListener('change', () => {
+    const g = layers[checkbox.dataset.layer];
+    if (g) { g.visible = checkbox.checked; render(); }
+  });
+});
+
+function addLayer(key, group) {
+  layers[key] = group;
+  const cb = document.querySelector(`input[data-layer="${key}"]`);
+  if (cb) group.visible = cb.checked;
+  scene.add(group);
+  render();
+}
+
+// ── Color mode ────────────────────────────────────────────────────────────────
+
+let colorMode = 'height';
+let globalZMin = 0, globalZMax = 1;
+
+// ── Land cover raster lookup ──────────────────────────────────────────────────
+// lcPixels: flat Uint8ClampedArray (RGBA) from the landcover PNG canvas readback
+// lcMeta:   { xMin, yMax, pixelSize, width, height, legend }
+let lcPixels = null, lcMeta = null;
+
+async function loadLandcover() {
+  try {
+    lcMeta = await fetch('landcover.json').then(r => r.json());
+    lcPixels = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width  = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        resolve(ctx.getImageData(0, 0, img.width, img.height).data);
+      };
+      img.onerror = reject;
+      img.src = 'landcover.png';
+    });
+
+    // Build legend from the metadata
+    const el = document.getElementById('lc-legend');
+    for (const [id, cls] of Object.entries(lcMeta.legend).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+      const row = document.createElement('div');
+      row.className = 'cls-row';
+      row.innerHTML = `<span>${cls.name}</span><span class="cls-swatch" style="background:${cls.color}"></span>`;
+      el.appendChild(row);
+    }
+
+    document.getElementById('btn-lc').style.display = '';
+  } catch (err) {
+    console.warn('Land cover not available:', err.message);
+  }
+}
+
+// posArr[ci+2] is already Z - coordOffset.z = Z - gMinZ, so dividing by span
+// gives the normalised height directly — no separate zArr needed.
+function applyNodeColors(node, from, to) {
+  const span = globalZMax - globalZMin || 1;
+  for (let i = from; i < to; i++) {
+    const ci = i * 3;
+    if (colorMode === 'height') {
+      heightColor(node.posArr[ci + 2] / span, node.colArr, ci);
+    } else if (colorMode === 'classification') {
+      classColor(node.clsArr[i], node.colArr, ci);
+    } else if (colorMode === 'rgb' && node.tile.hasRGB) {
+      node.colArr[ci]   = node.rgbArr[ci]   / 255;
+      node.colArr[ci+1] = node.rgbArr[ci+1] / 255;
+      node.colArr[ci+2] = node.rgbArr[ci+2] / 255;
+    } else if (colorMode === 'landcover' && lcPixels) {
+      // Convert from world-space back to absolute SWEREF99TM, then to raster pixel
+      const absX = node.posArr[ci]   + coordOffset.x;
+      const absY = node.posArr[ci+1] + coordOffset.y;
+      const px = Math.floor((absX - lcMeta.xMin) / lcMeta.pixelSize);
+      const py = Math.floor((lcMeta.yMax - absY) / lcMeta.pixelSize);
+      if (px >= 0 && px < lcMeta.width && py >= 0 && py < lcMeta.height) {
+        const pidx = (py * lcMeta.width + px) * 4;
+        node.colArr[ci]   = lcPixels[pidx]   / 255;
+        node.colArr[ci+1] = lcPixels[pidx+1] / 255;
+        node.colArr[ci+2] = lcPixels[pidx+2] / 255;
+      } else {
+        node.colArr[ci] = node.colArr[ci+1] = node.colArr[ci+2] = 0.3;
+      }
+    } else {
+      heightColor(node.posArr[ci + 2] / span, node.colArr, ci);
+    }
+  }
+}
+
+function recolorAll() {
+  for (const tile of tileStates) {
+    for (const node of tile.allNodes) {
+      if (!node.loaded || !node.geo) continue;
+      applyNodeColors(node, 0, node.pointCount);
+      node.geo.attributes.color.needsUpdate = true;
+    }
+  }
+  render();
+}
+
+document.querySelectorAll('.cm-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    colorMode = btn.dataset.mode;
+    document.querySelectorAll('.cm-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('height-legend').style.display = colorMode === 'height'          ? '' : 'none';
+    document.getElementById('cls-legend').style.display    = colorMode === 'classification'  ? '' : 'none';
+    document.getElementById('lc-legend').style.display     = colorMode === 'landcover'       ? '' : 'none';
+    recolorAll();
+    saveCameraToURL();
+  });
+});
+
+// ── Tile / Node state ─────────────────────────────────────────────────────────
+
+let tileStates = [];
+let coordOffset = { x: 0, y: 0, z: 0 };
+let lazPerf = null;
+let tilesGroup = null;
+let fetchCenter = null;
+const loadedTileNames = new Set();
+
+const REFETCH_THRESHOLD = 1200;  // m — re-query when target drifts this far from last fetch
+const EVICT_DISTANCE    = 4500;  // m — drop tiles whose center exceeds this
+
+let resolveOffset;
+const offsetReady = new Promise(r => { resolveOffset = r; });
+
+// Shared material for all node meshes — avoids per-node GPU state switches.
+const pointMaterial = new THREE.PointsMaterial({ vertexColors: true, size: 0.5, sizeAttenuation: true });
+
+function makeTile(tileinfo) {
+  return {
+    name: tileinfo.name,
+    url: new URL(tileinfo.path, location.href).href,
+    copc: null,
+    maxAvailDepth: 0,
+    hasRGB: false,
+    box: null,               // THREE.Box3 in world-space coords
+    nodeMap: {},             // keyStr → nodeState
+    allNodes: [],            // flat array for fast iteration
+    group: new THREE.Group(),
+    failed: false,
+    outOfViewSince: null,
+    seenClasses: new Set(),
+  };
+}
+
+// Compute a THREE.Box3 (world-space) for an octree node.
+// The COPC octree subdivides each axis by 2 at every depth level.
+function computeNodeBox(tile, depth, nx, ny, nz) {
+  const { min, max } = tile.copc.header;
+  const cells = 1 << depth;  // 2^depth
+  const sx = (max[0] - min[0]) / cells;
+  const sy = (max[1] - min[1]) / cells;
+  const sz = (max[2] - min[2]) / cells;
+  return new THREE.Box3(
+    new THREE.Vector3(
+      min[0] + nx       * sx - coordOffset.x,
+      min[1] + ny       * sy - coordOffset.y,
+      min[2] + nz       * sz - coordOffset.z
+    ),
+    new THREE.Vector3(
+      min[0] + (nx + 1) * sx - coordOffset.x,
+      min[1] + (ny + 1) * sy - coordOffset.y,
+      min[2] + (nz + 1) * sz - coordOffset.z
+    )
+  );
+}
+
+function makeNodeState(tile, keyStr, entry) {
+  const [d, nx, ny, nz] = keyStr.split('-').map(Number);
+  return {
+    tile,
+    keyStr, depth: d, nx, ny, nz,
+    entry,
+    box: computeNodeBox(tile, d, nx, ny, nz),
+    loaded: false, loading: false, failed: false, queued: false,
+    posArr: null, clsArr: null, rgbArr: null, colArr: null,
+    pointCount: 0,
+    geo: null, mesh: null,
+  };
+}
+
+function fillNodeBuffer(node, view) {
+  const n    = view.pointCount;
+  const tile = node.tile;
+
+  node.posArr = new Float32Array(n * 3);
+  node.clsArr = new Uint8Array(n);
+  node.colArr = new Float32Array(n * 3);
+  if (tile.hasRGB) node.rgbArr = new Uint8Array(n * 3);
+
+  const getX   = view.getter('X');
+  const getY   = view.getter('Y');
+  const getZ   = view.getter('Z');
+  const getCls = view.getter('Classification');
+  const getR   = tile.hasRGB ? view.getter('Red')   : null;
+  const getG   = tile.hasRGB ? view.getter('Green') : null;
+  const getB   = tile.hasRGB ? view.getter('Blue')  : null;
+
+  for (let j = 0; j < n; j++) {
+    const j3 = j * 3;
+    node.posArr[j3]   = getX(j) - coordOffset.x;
+    node.posArr[j3+1] = getY(j) - coordOffset.y;
+    node.posArr[j3+2] = getZ(j) - coordOffset.z;
+    const cls = getCls(j);
+    node.clsArr[j] = cls;
+    tile.seenClasses.add(cls);
+    if (tile.hasRGB) {
+      node.rgbArr[j3]   = getR(j) >> 8;
+      node.rgbArr[j3+1] = getG(j) >> 8;
+      node.rgbArr[j3+2] = getB(j) >> 8;
+    }
+  }
+
+  node.pointCount = n;
+  applyNodeColors(node, 0, n);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(node.posArr, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(node.colArr, 3));
+
+  // Explicit bounding geometry lets Three.js frustum-cull individual nodes.
+  geo.boundingBox = node.box.clone();
+  geo.boundingSphere = new THREE.Sphere();
+  node.box.getBoundingSphere(geo.boundingSphere);
+
+  const mesh = new THREE.Points(geo, pointMaterial);
+  mesh.frustumCulled = true;
+
+  node.geo  = geo;
+  node.mesh = mesh;
+  node.loaded = true;
+  tile.group.add(mesh);
+}
+
+function unloadNode(node) {
+  if (!node.loaded || node.loading) return;
+  if (node.mesh) node.tile.group.remove(node.mesh);
+  if (node.geo)  node.geo.dispose();
+  node.posArr = null; node.clsArr = null; node.colArr = null; node.rgbArr = null;
+  node.geo = null; node.mesh = null;
+  node.loaded = false; node.queued = false;
+}
+
+// ── Load queue (max 4 concurrent) ─────────────────────────────────────────────
+
+const loadQ = {
+  tasks:  [],
+  active: 0,
+  max:    4,
+  add(priority, fn) {
+    this.tasks.push({ priority, fn });
+    this.tasks.sort((a, b) => b.priority - a.priority);
+    this._pump();
+  },
+  _pump() {
+    while (this.active < this.max && this.tasks.length > 0) {
+      const { fn } = this.tasks.shift();
+      this.active++;
+      fn().finally(() => { this.active--; this._pump(); });
+    }
+  },
+};
+
+// ── LOD ───────────────────────────────────────────────────────────────────────
+
+let lodTimer = null;
+function scheduleLODUpdate() {
+  clearTimeout(lodTimer);
+  lodTimer = setTimeout(updateLOD, 400);
+}
+
+let zoomTimer = null;
+function scheduleURLUpdate() {
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(saveCameraToURL, 1000);
+}
+
+function updateLOD() {
+  camera.updateMatrixWorld();
+  updateGroundFocus();
+  const frustum = new THREE.Frustum().setFromProjectionMatrix(
+    new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  );
+
+  const now = Date.now();
+
+  for (const tile of tileStates) {
+    if (tile.failed) continue;
+
+    const tileVisible = tile.box && frustum.intersectsBox(tile.box);
+
+    if (!tileVisible) {
+      tile.outOfViewSince ??= now;
+      if (now - tile.outOfViewSince > 5_000) {
+        for (const node of tile.allNodes) {
+          if (node.depth > 1) unloadNode(node);
+        }
+      }
+      continue;
+    }
+
+    tile.outOfViewSince = null;
+
+    for (const node of tile.allNodes) {
+      if (node.failed || node.loading || node.loaded || node.queued) continue;
+
+      const want = computeNodeTargetDepth(node);
+      if (node.depth > want) continue;
+
+      const cx = (node.box.min.x + node.box.max.x) / 2;
+      const cy = (node.box.min.y + node.box.max.y) / 2;
+      const dist = Math.hypot(target.x - cx, target.y - cy);
+      // Lower depth (overview) and closer nodes get higher priority
+      const priority = (5 - node.depth) * 1000 - dist;
+
+      node.queued = true;
+      loadQ.add(priority, () => loadNode(node));
+    }
+  }
+
+  updateStatusBar();
+}
+
+async function loadNode(node) {
+  if (node.loaded || node.failed || node.tile.evicted) { node.queued = false; return; }
+  node.loading = true;
+  try {
+    const view = await Copc.loadPointDataView(node.tile.url, node.tile.copc, node.entry, { lazPerf });
+    fillNodeBuffer(node, view);
+    updateStatusBar();
+    render();
+  } catch (err) {
+    console.error('Load error:', node.tile.url, node.keyStr, err);
+    node.failed = true;
+  } finally {
+    node.loading = false;
+    node.queued  = false;
+  }
+
+  // Re-evaluate: more nodes may now be needed (progressive loading)
+  if (!node.failed) updateLOD();
+}
+
+// ── Status bar ────────────────────────────────────────────────────────────────
+
+function updateStatusBar() {
+  let totalPts = 0, loadingCount = 0;
+  for (const tile of tileStates) {
+    for (const node of tile.allNodes) {
+      if (node.loaded)  totalPts += node.pointCount;
+      if (node.loading) loadingCount++;
+    }
+  }
+  const el = document.getElementById('pt-count');
+  el.textContent = (totalPts / 1e6).toFixed(2) + 'M' + (loadingCount ? ' ↓' : '');
+  maybeUpdateClsLegend();
+}
+
+// ── Tile header + hierarchy loading ───────────────────────────────────────────
+
+async function loadHeader(tile) {
+  try {
+    tile.copc = await Copc.create(tile.url);
+    tile.hasRGB = [2, 3, 7, 8].includes(tile.copc.header.pointDataRecordFormat);
+  } catch (err) {
+    console.error('Header failed:', tile.url, err);
+    tile.failed = true;
+  }
+}
+
+async function loadHierarchy(tile) {
+  if (tile.failed) return;
+  try {
+    const all = {};
+    async function loadPage(info) {
+      const { nodes, pages } = await Copc.loadHierarchyPage(tile.url, info);
+      Object.assign(all, nodes);
+      for (const sub of Object.values(pages ?? {})) await loadPage(sub);
+    }
+    await loadPage(tile.copc.info.rootHierarchyPage);
+
+    let maxD = 0;
+    for (const [keyStr, entry] of Object.entries(all)) {
+      if (!entry.pointCount) continue;
+      const d = parseInt(keyStr.split('-')[0]);
+      maxD = Math.max(maxD, d);
+      const node = makeNodeState(tile, keyStr, entry);
+      tile.nodeMap[keyStr] = node;
+      tile.allNodes.push(node);
+    }
+    tile.maxAvailDepth = maxD;
+  } catch (err) {
+    console.error('Hierarchy failed:', tile.url, err);
+    tile.failed = true;
+  }
+}
+
+// ── Tree layers ───────────────────────────────────────────────────────────────
+
+function loadTreeLayer(url, color, layerKey, countKey, scale) {
+  fetch(url).then(r => r.json()).then(trees => {
+    const { x: ox, y: oy, z: oz } = coordOffset;
+    const group = new THREE.Group();
+
+    document.getElementById(countKey).textContent = trees.length.toLocaleString();
+
+    const positions = [];
+    for (const t of trees) {
+      positions.push(t.x - ox, t.y - oy, t.z_bottom - oz);
+      positions.push(t.x - ox, t.y - oy, t.z_top    - oz);
+    }
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const lines = new THREE.LineSegments(
+      lineGeo,
+      new THREE.LineDashedMaterial({ color, dashSize: 0.5, gapSize: 0.25, scale: scale })
+    );
+    lines.computeLineDistances();
+    group.add(lines);
+
+    const sphereGeo = new THREE.SphereGeometry(0.2 * scale, 8, 8);
+    const spheres   = new THREE.InstancedMesh(sphereGeo, new THREE.MeshBasicMaterial({ color }), trees.length);
+    const matrix    = new THREE.Matrix4();
+    trees.forEach((t, i) => {
+      matrix.setPosition(t.x - ox, t.y - oy, t.z_top - oz);
+      spheres.setMatrixAt(i, matrix);
+    });
+    spheres.instanceMatrix.needsUpdate = true;
+    group.add(spheres);
+
+    addLayer(layerKey, group);
+  });
+}
+
+// ── Classification legend (built once all depth-0 nodes are loaded) ───────────
+
+let legendBuilt = false;
+function maybeUpdateClsLegend() {
+  if (legendBuilt) return;
+  for (const tile of tileStates) {
+    if (tile.failed) continue;
+    const d0 = tile.allNodes.filter(n => n.depth === 0);
+    if (d0.length === 0) return;  // hierarchy not loaded yet
+    if (d0.some(n => !n.loaded && !n.failed)) return;
+  }
+
+  legendBuilt = true;
+  const seen = new Set();
+  for (const tile of tileStates) for (const cls of tile.seenClasses) seen.add(cls);
+
+  const clsLegend = document.getElementById('cls-legend');
+  for (const cls of [...seen].sort((a, b) => a - b)) {
+    if (cls > 18) continue;
+    const c = cls * 3;
+    const hex = '#' + [CLS_RGB[c], CLS_RGB[c+1], CLS_RGB[c+2]]
+      .map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+    const row = document.createElement('div');
+    row.className = 'cls-row';
+    row.innerHTML = `<span>${CLS_LABELS[cls]}</span><span class="cls-swatch" style="background:${hex}"></span>`;
+    clsLegend.appendChild(row);
+  }
+}
+
+// ── Dynamic tile loading ──────────────────────────────────────────────────────
+
+let refetchTimer = null;
+let refreshing = false;
+
+function scheduleRefetch() {
+  clearTimeout(refetchTimer);
+  refetchTimer = setTimeout(() => {
+    if (!fetchCenter) return;
+    const wx = target.x + coordOffset.x;
+    const wy = target.y + coordOffset.y;
+    if (Math.hypot(wx - fetchCenter.x, wy - fetchCenter.y) > REFETCH_THRESHOLD) {
+      refreshTiles(wx, wy);
+    }
+  }, 500);
+}
+
+async function refreshTiles(cx, cy) {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    fetchCenter = { x: cx, y: cy };
+
+    let tileInfos;
+    try {
+      tileInfos = await fetch(`/api/find?x=${cx}&y=${cy}`).then(r => r.json());
+    } catch (err) {
+      console.error('tile refresh failed:', err);
+      return;
+    }
+
+    const newInfos = tileInfos.filter(info => !loadedTileNames.has(info.name));
+    const newStates = newInfos.map(info => {
+      loadedTileNames.add(info.name);
+      const tile = makeTile(info);
+      tileStates.push(tile);
+      tilesGroup.add(tile.group);
+      return tile;
+    });
+
+    if (newStates.length > 0) {
+      await Promise.allSettled(newStates.map(loadHeader));
+
+      for (const tile of newStates) {
+        if (tile.failed || !tile.copc) continue;
+        const { min, max } = tile.copc.header;
+        tile.box = new THREE.Box3(
+          new THREE.Vector3(min[0] - coordOffset.x, min[1] - coordOffset.y, min[2] - coordOffset.z),
+          new THREE.Vector3(max[0] - coordOffset.x, max[1] - coordOffset.y, max[2] - coordOffset.z)
+        );
+      }
+
+      await Promise.allSettled(newStates.map(loadHierarchy));
+    }
+
+    // Evict tiles whose centre is too far from the new fetch centre
+    const evict = tileStates.filter(tile => {
+      if (!tile.copc) return false;
+      const { min, max } = tile.copc.header;
+      const tcx = (min[0] + max[0]) / 2;
+      const tcy = (min[1] + max[1]) / 2;
+      return Math.hypot(tcx - cx, tcy - cy) > EVICT_DISTANCE;
+    });
+
+    for (const tile of evict) {
+      tile.evicted = true;
+      for (const node of tile.allNodes) unloadNode(node);
+      tilesGroup.remove(tile.group);
+      tile.group.clear();
+      loadedTileNames.delete(tile.name);
+    }
+    if (evict.length > 0) {
+      tileStates = tileStates.filter(t => !evict.includes(t));
+    }
+
+    updateLOD();
+    render();
+  } finally {
+    refreshing = false;
+  }
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+const CENTER_X = 600755;
+const CENTER_Y = 7073590;
+
+async function init() {
+  const loadingEl = document.getElementById('loading');
+
+  lazPerf = await Las.PointData.createLazPerf({ locateFile: f => '/' + f });
+
+  loadLandcover();  // fire and forget — button appears when ready
+
+  const tileFiles = await fetch(`/api/find?x=${CENTER_X}&y=${CENTER_Y}`).then(r => r.json());
+  tileStates = tileFiles.map(makeTile);
+  for (const tile of tileStates) loadedTileNames.add(tile.name);
+  fetchCenter = { x: CENTER_X, y: CENTER_Y };
+
+  tilesGroup = new THREE.Group();
+  for (const tile of tileStates) tilesGroup.add(tile.group);
+  addLayer('pointCloud', tilesGroup);
+
+  loadingEl.textContent = 'Loading tile headers…';
+  await Promise.allSettled(tileStates.map(loadHeader));
+
+  // Compute global coordinate offset from union of all tile bounds
+  let gMinX =  Infinity, gMinY =  Infinity, gMinZ =  Infinity;
+  let gMaxX = -Infinity, gMaxY = -Infinity, gMaxZ = -Infinity;
+  for (const tile of tileStates) {
+    if (tile.failed || !tile.copc) continue;
+    const { min, max } = tile.copc.header;
+    gMinX = Math.min(gMinX, min[0]); gMaxX = Math.max(gMaxX, max[0]);
+    gMinY = Math.min(gMinY, min[1]); gMaxY = Math.max(gMaxY, max[1]);
+    gMinZ = Math.min(gMinZ, min[2]); gMaxZ = Math.max(gMaxZ, max[2]);
+  }
+
+  coordOffset.x = (gMinX + gMaxX) / 2;
+  coordOffset.y = (gMinY + gMaxY) / 2;
+  coordOffset.z = gMinZ;
+  globalZMin = 0;
+  globalZMax = gMaxZ - gMinZ;
+  resolveOffset();  // unblocks tree loading
+
+  for (const tile of tileStates) {
+    if (tile.failed || !tile.copc) continue;
+    const { min, max } = tile.copc.header;
+    tile.box = new THREE.Box3(
+      new THREE.Vector3(min[0] - coordOffset.x, min[1] - coordOffset.y, min[2] - coordOffset.z),
+      new THREE.Vector3(max[0] - coordOffset.x, max[1] - coordOffset.y, max[2] - coordOffset.z)
+    );
+  }
+
+  target.set(0, 0, (gMaxZ - gMinZ) * 0.35);
+  defaults.target.set(0, 0, (gMaxZ - gMinZ) * 0.35);
+  sph.r = Math.max(gMaxX - gMinX, gMaxY - gMinY) * 0.9;
+  defaults.sph.r = sph.r;
+
+  document.getElementById('z-max').textContent = Math.round(gMaxZ) + ' m';
+  document.getElementById('z-min').textContent = Math.round(gMinZ) + ' m';
+
+  const anyRGB = tileStates.some(t => t.hasRGB);
+  document.getElementById('btn-rgb').style.display = anyRGB ? '' : 'none';
+
+  loadingEl.textContent = 'Loading tile hierarchies…';
+  await Promise.allSettled(tileStates.map(loadHierarchy));
+
+  loadingEl.style.display = 'none';
+  document.getElementById('ui').style.display     = 'block';
+  document.getElementById('legend').style.display = 'block';
+
+  loadCameraFromURL();
+
+  updateLOD();
+  render();
+}
+
+offsetReady.then(() => {
+  loadTreeLayer('trees_p2r.json',     0xff2222, 'p2r',     'p2r-count',     2.0);
+  loadTreeLayer('trees_pitfree.json', 0x22ff22, 'pitfree', 'pitfree-count', 2.0);
+  loadTreeLayer('cameras.json',       0xffff22, 'cameras', 'cameras-count', 10.0);
+});
+
+init().catch(err => {
+  document.getElementById('loading').textContent = 'Error: ' + err.message;
+  console.error(err);
+});
+</script>
+</body>
+</html>
