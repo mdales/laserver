@@ -123,17 +123,39 @@ let render_find state req =
       let body = rtiles_to_json tiles in
       Server.respond_string ~status:`OK ~body ()
 
-let render_static_file sw path _state _req =
-  let size = (Eio.Path.stat ~follow:true path).size in
-  let file = Eio.Path.open_in ~sw path in
+let render_static_file sw path _state req =
+  let stat = Eio.Path.stat ~follow:true path in
+  let mtime = Option.get (Ptime.of_float_s stat.mtime) in
+  let last_modified = Util.ptime_to_last_modified mtime in
   let headers =
     Http.Header.of_list
       [
-        ("content-length", Optint.Int63.to_string size);
-        ("accept-ranges", "bytes");
+        ("Accept-Ranges", "bytes");
+        ("Content-Length", Optint.Int63.to_string stat.size);
+        ("Content-Type", "application/octet-stream");
+        ("Last-Modified", last_modified);
       ]
   in
-  Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
+
+  let file = Eio.Path.open_in ~sw path in
+
+  let request_headers = Http.Request.headers req in
+  let range_header = Http.Header.get request_headers "range" in
+  let file_size = Optint.Int63.to_int64 stat.size in
+  match range_header with
+  | Some range_str when String.starts_with ~prefix:"bytes=" range_str -> (
+    match Util.parse_range range_str file_size with
+      | Some (start_pos, end_pos) -> (
+        let len = Int64.sub end_pos start_pos in
+        let _ = Eio.File.seek file (Optint.Int63.of_int64 start_pos) `Set in
+        let buf = Eio.Buf_read.of_flow file ~max_size:(Int64.to_int len) in
+        let bytes = Eio.Buf_read.take (Int64.to_int len) buf in
+        let body = Eio.Flow.string_source bytes in
+        Cohttp_eio.Server.respond ~status:`Partial_content ~headers ~body ()
+      )
+      | None -> Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
+  )
+  | _ -> Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
 
 let handler routes state _socket req _body =
   let open Cohttp_eio in
