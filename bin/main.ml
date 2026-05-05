@@ -6,20 +6,40 @@ let ( let* ) = Result.bind
 a Repr of anything other than basic types. *)
 
 module RTile = struct
-  type t = { name : string; bounds : Rtree.Rectangle.t }
+  type t = {
+    name : string;
+    envelope : Rtree.Rectangle.t;
+    count : int;
+    bounds : (float * float * float) * (float * float * float);
+  }
+
+  let v tile =
+    let _, name = Option.get (Eio.Path.split tile.path) in
+    let header = Oclas.Las.header tile.info in
+    let bounds = Oclas.Header.bounds header in
+    let (x0, y0, _), (x1, y1, _) = bounds in
+    let envelope = Rtree.Rectangle.v ~x0 ~y0 ~x1 ~y1 in
+    let count = Oclas.Header.number_of_point_records header in
+    { name; envelope; count; bounds }
 
   let t =
     let open Repr in
-    record "tile" (fun name bounds -> { name; bounds })
+    record "RTile" (fun n e c b ->
+        { name = n; envelope = e; count = c; bounds = b })
     |+ field "name" string (fun t -> t.name)
-    |+ field "bounds" Rtree.Rectangle.t (fun t -> t.bounds)
+    |+ field "envelope" Rtree.Rectangle.t (fun t -> t.envelope)
+    |+ field "count" int (fun t -> t.count)
+    |+ field "bounds"
+         (pair (triple float float float) (triple float float float))
+         (fun t -> t.bounds)
     |> sealr
-
-  let n t = t.name
 
   type envelope = Rtree.Rectangle.t
 
-  let envelope t = t.bounds
+  let name t = t.name
+  let bounds t = t.bounds
+  let point_count t = t.count
+  let envelope t = t.envelope
 end
 
 module R = Rtree.Make (Rtree.Rectangle) (RTile)
@@ -34,15 +54,7 @@ let build_state tile_list =
         (name, tile))
       tile_list
   in
-  let rtiles =
-    List.map
-      (fun (name, tile) ->
-        let header = Oclas.Las.header tile.info in
-        let (x0, y0, _), (x1, y1, _) = Oclas.Header.bounds header in
-        let bounds = Rtree.Rectangle.v ~x0 ~y0 ~x1 ~y1 in
-        RTile.{ name; bounds })
-      tile_map
-  in
+  let rtiles = List.map (fun (_, tile) -> RTile.v tile) tile_map in
   let rtree = R.load rtiles in
   { tile_map; rtree }
 
@@ -56,16 +68,16 @@ let find_las_files sw dir_path =
       let info = Oclas.Las.of_buffer buf in
       match info with Ok info -> Some { path; info } | Error _ -> None)
 
-let tiles_to_json tile_map =
+let rtiles_to_json rtiles =
   `List
     (List.map
-       (fun (name, tile) ->
-         let header = Oclas.Las.header tile.info in
-         let (x0, y0, z0), (x1, y1, z1) = Oclas.Header.bounds header in
+       (fun rtile ->
+         let name = RTile.name rtile in
+         let (x0, y0, z0), (x1, y1, z1) = RTile.bounds rtile in
          `Assoc
            [
              ("name", `String name);
-             ("point_count", `Int (Oclas.Header.number_of_point_records header));
+             ("point_count", `Int (RTile.point_count rtile));
              ( "bounds",
                `Assoc
                  [
@@ -79,7 +91,7 @@ let tiles_to_json tile_map =
                    );
                  ] );
            ])
-       tile_map)
+       rtiles)
   |> Yojson.Safe.to_string
 
 let get_float_query uri name =
@@ -95,20 +107,12 @@ let get_point_query state req =
   let* x = get_float_query uri "x" in
   let* y = get_float_query uri "y" in
   let envelope = Rtree.Rectangle.v ~x0:x ~y0:y ~x1:(x +. 1.) ~y1:(y +. 1.) in
-  let keys = R.find state.rtree envelope in
-  (* so inefficient *)
-  let tiles =
-    List.map
-      (fun rtile ->
-        let key = RTile.n rtile in
-        (key, List.assoc key state.tile_map))
-      keys
-  in
-  Ok tiles
-
+  let rtiles = R.find state.rtree envelope in
+  Ok rtiles
 
 let render_index state _req =
-  let body = tiles_to_json state.tile_map in
+  let all_tiles = R.values state.rtree in
+  let body = rtiles_to_json all_tiles in
   Cohttp_eio.Server.respond_string ~status:`OK ~body ()
 
 let render_find state req =
@@ -116,11 +120,20 @@ let render_find state req =
   match get_point_query state req with
   | Error str -> Server.respond_string ~status:`Not_acceptable ~body:str ()
   | Ok tiles ->
-      let body = tiles_to_json tiles in
+      let body = rtiles_to_json tiles in
       Server.respond_string ~status:`OK ~body ()
 
-let render_static_file path _state _req =
-    ()
+let render_static_file sw path _state _req =
+  let size = (Eio.Path.stat ~follow:true path).size in
+  let file = Eio.Path.open_in ~sw path in
+  let headers =
+    Http.Header.of_list
+      [
+        ("content-length", Optint.Int63.to_string size);
+        ("accept-ranges", "bytes");
+      ]
+  in
+  Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
 
 let handler routes state _socket req _body =
   let open Cohttp_eio in
@@ -129,10 +142,9 @@ let handler routes state _socket req _body =
 
   match Http.Request.meth req with
   | `GET -> (
-    match List.assoc_opt path routes with
-    | Some handler -> handler state req
-    | None -> Server.respond_string ~status:`Not_found ~body:"Not found\n" ()
-  )
+      match List.assoc_opt path routes with
+      | Some handler -> handler state req
+      | None -> Server.respond_string ~status:`Not_found ~body:"Not found\n" ())
   | _ -> Server.respond_string ~status:`Not_found ~body:"Not found\n" ()
 
 let log_error ex = Printf.eprintf "Server error: %s\n%!" (Printexc.to_string ex)
@@ -146,14 +158,15 @@ let laserver env sw path =
   let tiles = find_las_files sw dir in
   let state = build_state tiles in
 
-  let fixed_routes = [
-    ("/",  render_index);
-    ("/find", render_find)
-  ] in
+  let fixed_routes = [ ("/", render_index); ("/find", render_find) ] in
 
-  let static_routes = List.map (fun (name, tile) ->
-    ("/tile/" ^ name, render_static_file tile.path)
-  ) state.tile_map in
+  (* This uses the tile list rather than the rtree as I don't know how
+  to put the eio path into the Repr rtree requires *)
+  let static_routes =
+    List.map
+      (fun (name, tile) -> ("/tile/" ^ name, render_static_file sw tile.path))
+      state.tile_map
+  in
 
   let routes = fixed_routes @ static_routes in
 
