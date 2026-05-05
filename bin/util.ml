@@ -1,4 +1,3 @@
-
 let parse_range range_str file_size =
   let rex = Pcre2.regexp {|bytes=(\d*)-(\d*)|} in
   let eof = Int64.sub file_size 1L in
@@ -16,30 +15,30 @@ let parse_range range_str file_size =
   | Invalid_argument _ -> None
   | Not_found -> None
 
-
 let days = [| "Sun"; "Mon"; "Tue"; "Wed"; "Thu"; "Fri"; "Sat" |]
+
 let months =
-[|
-  "Jan";
-  "Feb";
-  "Mar";
-  "Apr";
-  "May";
-  "Jun";
-  "Jul";
-  "Aug";
-  "Sep";
-  "Oct";
-  "Nov";
-  "Dec";
-|]
+  [|
+    "Jan";
+    "Feb";
+    "Mar";
+    "Apr";
+    "May";
+    "Jun";
+    "Jul";
+    "Aug";
+    "Sep";
+    "Oct";
+    "Nov";
+    "Dec";
+  |]
 
 let ptime_to_last_modified (t : Ptime.t) : string =
-(* TODO: convert to GMT *)
-let dow = days.(Ptime.weekday_num t) in
-let (year, month, day), ((hours, mins, seconds), _tz) =
-  Ptime.to_date_time t
-in
-Printf.sprintf "%s, %d %s %d %02d:%02d:%02d GMT" dow day
-  months.(month - 1)
-  year hours mins seconds
+  (* TODO: convert to GMT *)
+  let dow = days.(Ptime.weekday_num t) in
+  let (year, month, day), ((hours, mins, seconds), _tz) =
+    Ptime.to_date_time t
+  in
+  Printf.sprintf "%s, %d %s %d %02d:%02d:%02d GMT" dow day
+    months.(month - 1)
+    year hours mins seconds

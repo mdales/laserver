@@ -19,7 +19,7 @@
  (name laserver)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml)
+ (depends ocaml eio_main cohttp-eio yojson rtree pcre2 magic-mime)
  (tags
   ("add topics" "to describe" your project)))
 

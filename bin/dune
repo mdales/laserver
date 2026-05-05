@@ -1,4 +1,4 @@
 (executable
  (public_name laserver)
  (name main)
- (libraries laserver oclas eio_main cohttp-eio yojson rtree pcre2))
+ (libraries laserver oclas eio_main cohttp-eio yojson rtree pcre2 magic-mime))

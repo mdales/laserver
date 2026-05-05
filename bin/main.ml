@@ -61,30 +61,17 @@ let build_state tile_list =
 let rec find_las_files sw dir_path =
   Eio.Path.read_dir dir_path
   |> List.concat_map (fun item ->
-    let path = Eio.Path.(dir_path / item) in
-    match Eio.Path.is_directory path with
-    | true -> find_las_files sw path
-    | false -> (
-      match (String.ends_with ~suffix:".laz" item) with
-      | false -> []
-      | true -> (
-        let flow = Eio.Path.open_in ~sw path in
-        let buf = Eio.Buf_read.of_flow flow ~max_size:1_000_000 in
-        let info = Oclas.Las.of_buffer buf in (
-          match info with Ok info -> [{ path; info }] | Error _ -> []
-        )
-      )
-    )
-  )
-
-
-  (* |> List.filter (String.ends_with ~suffix:".laz")
-  |> List.filter_map (fun name ->
-      let path = Eio.Path.(dir_path / name) in
-      let flow = Eio.Path.open_in ~sw path in
-      let buf = Eio.Buf_read.of_flow flow ~max_size:1_000_000 in
-      let info = Oclas.Las.of_buffer buf in
-      match info with Ok info -> Some { path; info } | Error _ -> None) *)
+      let path = Eio.Path.(dir_path / item) in
+      match Eio.Path.is_directory path with
+      | true -> find_las_files sw path
+      | false -> (
+          match String.ends_with ~suffix:".laz" item with
+          | false -> []
+          | true -> (
+              let flow = Eio.Path.open_in ~sw path in
+              let buf = Eio.Buf_read.of_flow flow ~max_size:1_000_000 in
+              let info = Oclas.Las.of_buffer buf in
+              match info with Ok info -> [ { path; info } ] | Error _ -> [])))
 
 let rtiles_to_json rtiles =
   `List
@@ -146,12 +133,13 @@ let render_static_file sw path _state req =
   let stat = Eio.Path.stat ~follow:true path in
   let mtime = Option.get (Ptime.of_float_s stat.mtime) in
   let last_modified = Util.ptime_to_last_modified mtime in
+  let content_type = Magic_mime.lookup (Eio.Path.native_exn path) in
   let headers =
     Http.Header.of_list
       [
         ("Accept-Ranges", "bytes");
         ("Content-Length", Optint.Int63.to_string stat.size);
-        ("Content-Type", "application/octet-stream");
+        ("Content-Type", content_type);
         ("Last-Modified", last_modified);
       ]
   in
@@ -163,17 +151,15 @@ let render_static_file sw path _state req =
   let file_size = Optint.Int63.to_int64 stat.size in
   match range_header with
   | Some range_str when String.starts_with ~prefix:"bytes=" range_str -> (
-    match Util.parse_range range_str file_size with
-      | Some (start_pos, end_pos) -> (
-        let len = Int64.sub end_pos start_pos in
-        let _ = Eio.File.seek file (Optint.Int63.of_int64 start_pos) `Set in
-        let buf = Eio.Buf_read.of_flow file ~max_size:(Int64.to_int len) in
-        let bytes = Eio.Buf_read.take (Int64.to_int len) buf in
-        let body = Eio.Flow.string_source bytes in
-        Cohttp_eio.Server.respond ~status:`Partial_content ~headers ~body ()
-      )
-      | None -> Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
-  )
+      match Util.parse_range range_str file_size with
+      | Some (start_pos, end_pos) ->
+          let len = Int64.sub end_pos start_pos in
+          let _ = Eio.File.seek file (Optint.Int63.of_int64 start_pos) `Set in
+          let buf = Eio.Buf_read.of_flow file ~max_size:(Int64.to_int len) in
+          let bytes = Eio.Buf_read.take (Int64.to_int len) buf in
+          let body = Eio.Flow.string_source bytes in
+          Cohttp_eio.Server.respond ~status:`Partial_content ~headers ~body ()
+      | None -> Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ())
   | _ -> Cohttp_eio.Server.respond ~status:`OK ~headers ~body:file ()
 
 let handler routes state _socket req _body =
@@ -190,29 +176,54 @@ let handler routes state _socket req _body =
 
 let log_error ex = Printf.eprintf "Server error: %s\n%!" (Printexc.to_string ex)
 
-let laserver env sw path =
+let rec build_static_routes sw dir_path =
+  Eio.Path.read_dir dir_path
+  |> List.concat_map (fun item ->
+      let path = Eio.Path.(dir_path / item) in
+      match Eio.Path.is_directory path with
+      | true ->
+          build_static_routes sw path
+          |> List.map (fun (name, handler) ->
+              let new_name = "/" ^ item ^ name in
+              (new_name, handler))
+      | false -> [ ("/" ^ item, render_static_file sw path) ])
+
+let get_static_files env sw path =
   let arg_path =
     if Filename.is_relative path then Eio.Path.(env#cwd / path)
     else Eio.Path.(env#fs / path)
   in
-  let dir = Eio.Path.open_dir ~sw arg_path in
+  build_static_routes sw arg_path
+
+let laserver env sw laz_path static_path =
+  let arg_laz_path =
+    if Filename.is_relative laz_path then Eio.Path.(env#cwd / laz_path)
+    else Eio.Path.(env#fs / laz_path)
+  in
+  let dir = Eio.Path.open_dir ~sw arg_laz_path in
   let tiles = find_las_files sw dir in
   Printf.printf "Found %d tiles\n" (List.length tiles);
   let state = build_state tiles in
   Printf.printf "rtree size: %d\n" (R.size state.rtree);
   Printf.printf "Rtree values: %d\n" (List.length (R.values state.rtree));
 
-  let fixed_routes = [ ("/", render_index); ("/find", render_find) ] in
+  let fixed_routes = [ ("/api/all", render_index); ("/api/find", render_find) ] in
 
   (* This uses the tile list rather than the rtree as I don't know how
   to put the eio path into the Repr rtree requires *)
-  let static_routes =
+  let laz_static_routes =
     List.map
       (fun (name, tile) -> ("/tile/" ^ name, render_static_file sw tile.path))
       state.tile_map
   in
 
-  let routes = fixed_routes @ static_routes in
+  let static_routes =
+    match static_path with
+    | Some path -> get_static_files env sw path
+    | None -> []
+  in
+
+  let routes = fixed_routes @ laz_static_routes @ static_routes in
 
   let socket =
     Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
@@ -226,5 +237,6 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   match Array.to_list Sys.argv with
-  | [ _; path ] -> laserver env sw path
+  | [ _; laz_path; static_path ] -> laserver env sw laz_path (Some static_path)
+  | [ _; laz_path ] -> laserver env sw laz_path None
   | _ -> Printf.eprintf "Usage: %s <directory>\n" Sys.argv.(0)
