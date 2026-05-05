@@ -58,15 +58,33 @@ let build_state tile_list =
   let rtree = R.load rtiles in
   { tile_map; rtree }
 
-let find_las_files sw dir_path =
+let rec find_las_files sw dir_path =
   Eio.Path.read_dir dir_path
-  |> List.filter (String.ends_with ~suffix:".laz")
+  |> List.concat_map (fun item ->
+    let path = Eio.Path.(dir_path / item) in
+    match Eio.Path.is_directory path with
+    | true -> find_las_files sw path
+    | false -> (
+      match (String.ends_with ~suffix:".laz" item) with
+      | false -> []
+      | true -> (
+        let flow = Eio.Path.open_in ~sw path in
+        let buf = Eio.Buf_read.of_flow flow ~max_size:1_000_000 in
+        let info = Oclas.Las.of_buffer buf in (
+          match info with Ok info -> [{ path; info }] | Error _ -> []
+        )
+      )
+    )
+  )
+
+
+  (* |> List.filter (String.ends_with ~suffix:".laz")
   |> List.filter_map (fun name ->
       let path = Eio.Path.(dir_path / name) in
       let flow = Eio.Path.open_in ~sw path in
       let buf = Eio.Buf_read.of_flow flow ~max_size:1_000_000 in
       let info = Oclas.Las.of_buffer buf in
-      match info with Ok info -> Some { path; info } | Error _ -> None)
+      match info with Ok info -> Some { path; info } | Error _ -> None) *)
 
 let rtiles_to_json rtiles =
   `List
@@ -112,6 +130,7 @@ let get_point_query state req =
 
 let render_index state _req =
   let all_tiles = R.values state.rtree in
+  Printf.printf "%d\n%!" (List.length all_tiles);
   let body = rtiles_to_json all_tiles in
   Cohttp_eio.Server.respond_string ~status:`OK ~body ()
 
@@ -178,7 +197,10 @@ let laserver env sw path =
   in
   let dir = Eio.Path.open_dir ~sw arg_path in
   let tiles = find_las_files sw dir in
+  Printf.printf "Found %d tiles\n" (List.length tiles);
   let state = build_state tiles in
+  Printf.printf "rtree size: %d\n" (R.size state.rtree);
+  Printf.printf "Rtree values: %d\n" (List.length (R.values state.rtree));
 
   let fixed_routes = [ ("/", render_index); ("/find", render_find) ] in
 
