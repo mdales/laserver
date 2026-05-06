@@ -2,9 +2,6 @@ type tile = { path : Eio.Fs.dir_ty Eio.Path.t; info : Oclas.Las.t }
 
 let ( let* ) = Result.bind
 
-(* For the rtree we avoid storing complex data in there so we don't need to have
-a Repr of anything other than basic types. *)
-
 module RTile = struct
   type t = {
     name : string;
@@ -233,7 +230,23 @@ let get_static_files env sw path =
     if Filename.is_relative path then Eio.Path.(env#cwd / path)
     else Eio.Path.(env#fs / path)
   in
-  build_static_routes sw arg_path
+  let routes = build_static_routes sw arg_path in
+  let index_redirects = List.filter_map (fun (original_path, _) ->
+    match String.split_on_char '/' original_path  with
+    | [] -> None
+    | parts -> (
+      match (List.rev parts) with
+      | "index.html" :: rest -> (
+        let path = match rest with [] | [""] -> "/" | _ -> "/" ^ (String.concat "/" (List.rev rest)) ^ "/" in
+        Some (path, fun _s _r ->
+          let headers = Http.Header.of_list [("location", original_path)] in
+          Cohttp_eio.Server.respond ~status:`Moved_permanently ~headers ~body:(Eio.Flow.string_source "") ()
+        )
+      )
+      | _ -> None
+    )
+  ) routes in
+  routes @ index_redirects
 
 let laserver env sw laz_path static_path =
   let arg_laz_path =
