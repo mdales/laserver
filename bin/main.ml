@@ -62,7 +62,7 @@ let rec find_las_files' sw dir_path =
       match Eio.Path.is_directory path with
       | true -> find_las_files' sw path
       | false -> (
-          match String.ends_with ~suffix:".laz" item with
+          match String.ends_with ~suffix:".laz" item || String.ends_with ~suffix:".las" item with
           | false -> []
           | true -> (
               let flow = Eio.Path.open_in ~sw path in
